@@ -1,82 +1,39 @@
 pipeline {
-    agent any 
-    
-    tools{
-        jdk 'jdk11'
-        maven 'maven3'
-    }
-    
-    environment {
-        SCANNER_HOME=tool 'sonar-scanner'
-    }
-    
-    stages{
-        
-        stage("Git Checkout"){
-            steps{
-                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/jaiswaladi246/Petclinic.git'
-            }
+	agent {label "new-node"}
+	environment {
+		Docker_Cred=credentials('Docker_Cred')
+	}
+	stages {
+		stage ('SCM checkout') {
+			steps {
+				git branch:'main', url:'https://github.com/asifkhazi/docker-multistagebuild-java.git'
+			}
+		}
+		stage('SonarQube Analysis Stage') {
+                        steps{ 
+                             sh '''mvn clean verify sonar:sonar \
+                                  -Dsonar.projectKey=Petclinic \
+                                  -Dsonar.projectName='Petclinic' \
+                                  -Dsonar.host.url=http://18.61.160.246:9000 \
+                                  -Dsonar.token=sqp_31b8a133b5206e9adbb167d7cfd6cdb456e07645'''
+            		    }
         }
-        
-        stage("Compile"){
-            steps{
-                sh "mvn clean compile"
-            }
-        }
-        
-         stage("Test Cases"){
-            steps{
-                sh "mvn test"
-            }
-        }
-        
-        stage("Sonarqube Analysis "){
-            steps{
-                withSonarQubeEnv('sonar-server') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Petclinic \
-                    -Dsonar.java.binaries=. \
-                    -Dsonar.projectKey=Petclinic '''
-    
-                }
-            }
-        }
-        
-        stage("OWASP Dependency Check"){
-            steps{
-                dependencyCheck additionalArguments: '--scan ./ --format HTML ', odcInstallation: 'DP'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-        
-         stage("Build"){
-            steps{
-                sh " mvn clean install"
-            }
-        }
-        
-        stage("Docker Build & Push"){
-            steps{
-                script{
-                   withDockerRegistry(credentialsId: '58be877c-9294-410e-98ee-6a959d73b352', toolName: 'docker') {
-                        
-                        sh "docker build -t image1 ."
-                        sh "docker tag image1 adijaiswal/pet-clinic123:latest "
-                        sh "docker push adijaiswal/pet-clinic123:latest "
-                    }
-                }
-            }
-        }
-        
-        stage("TRIVY"){
-            steps{
-                sh " trivy image adijaiswal/pet-clinic123:latest"
-            }
-        }
-        
-        stage("Deploy To Tomcat"){
-            steps{
-                sh "cp  /var/lib/jenkins/workspace/CI-CD/target/petclinic.war /opt/apache-tomcat-9.0.65/webapps/ "
-            }
-        }
-    }
+		stage ('Build and Create docker image') {
+			steps {
+				sh 'docker build -t ${Docker_Cred_USR}/tomcatjar:${BUILD_ID} -f Dockerfile .'
+			}
+		}
+		stage ('Push image to artifactory') {
+			steps {
+				sh 'docker login -u ${Docker_Cred_USR} -p ${Docker_Cred_PSW}'
+				sh 'docker push ${Docker_Cred_USR}/tomcatjar:${BUILD_ID}'
+			}
+		}
+		stage ('Deploy') {
+			steps {
+				sh 'docker run --name cont-${BUILD_ID} ${Docker_Cred_USR}/tomcatjar:${BUILD_ID}'
+			}
+		}
+		
+	}
 }
